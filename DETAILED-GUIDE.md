@@ -1,14 +1,28 @@
-# ShopFlow Observability — الدليل التفصيلي الكامل
+# ShopFlow Observability — The Complete Line-by-Line Guide
 
-الملف ده بيشرح **كل سطر كود** في المشروع، وليه مكتوب كده، وهيحصل إيه لو شيلته.
-الهدف إن الطالب يقدر يفتح أي ملف ويعرف بالظبط بيعمل إيه من غير ما يحفظ.
+This document explains **every meaningful line of code** in the project — what it does, and why it's written that way. The goal is that you can open any file and understand exactly what it's doing without having to memorize it.
 
-> ملاحظة: الـ README.md التاني (المختصر) فيه خطوات التشغيل بس.
-> الملف ده هو "اتعلم ليه" مش "شغّل بسرعة".
+> **Note:** The other, shorter `README.md` covers *how to run* the project.
+> This document is the "why it's built this way" guide, not a quick-start.
 
 ---
 
-## 1. `Telemetry/ShopFlowTelemetry.cs` — نقطة البداية الحقيقية
+## Table of Contents
+
+1. [`Telemetry/ShopFlowTelemetry.cs` — The Real Starting Point](#1-telemetryshopflowtelemetrycs--the-real-starting-point)
+2. [`Models/Models.cs` — The Contracts Between Components](#2-modelsmodelscs--the-contracts-between-components)
+3. [`Services/ProductService.cs` — The Fake "Database"](#3-servicesproductservicecs--the-fake-database)
+4. [`Services/PaymentService.cs` — The Incident's "Time Bomb"](#4-servicespaymentservicecs--the-incidents-time-bomb)
+5. [`Services/OrderService.cs` — The Heart of the Trace](#5-servicesorderservicecs--the-heart-of-the-trace)
+6. [`Program.cs` — The Wiring Between Everything](#6-programcs--the-wiring-between-everything)
+7. [`docker-compose.yml` — How Everything Talks to Each Other](#7-docker-composeyml--how-everything-talks-to-each-other)
+8. [`prometheus.yml`](#8-prometheusyml)
+9. [`load-test.js` (k6)](#9-load-testjs-k6)
+10. [Summary: What File Do I Touch When...](#summary-what-file-do-i-touch-when)
+
+---
+
+## 1. `Telemetry/ShopFlowTelemetry.cs` — The Real Starting Point
 
 ```csharp
 public const string ServiceName = "ShopFlow.Api";
@@ -17,55 +31,47 @@ public static readonly ActivitySource ActivitySource = new(ServiceName);
 public static readonly Meter Meter = new(ServiceName);
 ```
 
-فكّر في `ActivitySource` و `Meter` كـ **"مصنع"**:
-- `ActivitySource` = المصنع اللي بيطلع منه كل الـ Spans (أجزاء الـ Trace).
-- `Meter` = المصنع اللي بيطلع منه كل الـ Metrics (الأرقام).
+Think of `ActivitySource` and `Meter` as **factories**:
 
-ليه عاملينهم `static readonly` وفي كلاس منفصل؟
-لأن OpenTelemetry بيشتغل بمبدأ: "أي span/metric بيتعمل من `ActivitySource` اسمه X،
-هعرضه بس لو قلت للـ Pipeline (في `Program.cs`) `.AddSource("X")`".
-يعني الاسم `ServiceName` هنا لازم يتطابق حرفيًا مع اللي هتكتبه في `Program.cs`،
-عشان كده حطيناه `const` في مكان واحد بدل ما نكتبه Hardcoded في كل ملف ونغلط في حرف.
+- `ActivitySource` — the factory that produces every **Span** (a piece of a Trace).
+- `Meter` — the factory that produces every **Metric** (a number).
+
+**Why are they `static readonly`, in their own dedicated class?**
+
+Because OpenTelemetry works on a strict opt-in principle: *"Any span/metric produced by an `ActivitySource` named X will only be exported if you explicitly tell the pipeline (in `Program.cs`) to `.AddSource("X")`."* That means the name `ServiceName` here has to match, character for character, whatever you write in `Program.cs`. Keeping it as a single `const` in one place — instead of hardcoding the string in every file — is what prevents a typo from silently breaking telemetry.
 
 ```csharp
 public static readonly Counter<long> OrdersCreated =
     Meter.CreateCounter<long>("orders.created", description: "...");
 ```
 
-`Counter<long>` = رقم بيزيد بس ومبينزلش (زي عداد السيارات في الطريق). كل مرة Order
-تتعمل بنجاح بتكتب `OrdersCreated.Add(1, ...)` واللي بيحصل فعليًا:
-1. الرقم ده بيتجمع جوه الـ Meter.
-2. لما Prometheus يعمل scrape لـ `/metrics`، هيلاقي:
+A `Counter<long>` is a number that only ever goes up (like a car-counter on a highway). Every time an order is created successfully, the code calls `OrdersCreated.Add(1, ...)`. What actually happens:
+
+1. The value accumulates inside the `Meter`.
+2. When Prometheus scrapes `/metrics`, it sees something like:
    ```
    orders_created_total{payment_method="card"} 1240
    ```
-3. في Grafana تقدر تعمل عليه Graph مباشرة.
+3. From there, you can graph it directly in Grafana.
 
 ```csharp
 public static readonly Histogram<double> PaymentDuration =
     Meter.CreateHistogram<double>("payment.duration", unit: "ms", ...);
 ```
 
-`Histogram` مختلف عن `Counter`: مش رقم بيزيد بس، ده بيسجل **توزيع** قيم
-(كل عملية دفع أخدت كام ميلي ثانية) عشان تقدر تحسب منه P50/P95/P99 بعدين في
-Prometheus/Grafana. لو استخدمنا `Counter` هنا كنا هنعرف "عدد مرات الدفع" بس،
-مش "قد إيه كل مرة استغرقت".
+A `Histogram` is different from a `Counter`: instead of a single ever-increasing number, it records a **distribution** of values (how many milliseconds each individual payment took), so you can later compute P50/P95/P99 in Prometheus/Grafana. If we'd used a `Counter` here we would only know "how many payments happened" — not "how long each one actually took."
 
-**لو شيلت الملف ده كله:** الكود هيكمل يشتغل عادي (لأن `AddAspNetCoreInstrumentation()`
-لوحدها بتديك traces/metrics تلقائية للـ HTTP)، لكن هتفقد أي رؤية على منطق
-الـ Business بتاعك (orders.created, payment.duration, والـ spans المسماة زي
-"CheckInventory"). يعني هترجع لـ Monitoring عادي بدل Observability حقيقي.
+**If you deleted this entire file:** the app would keep running fine (because `.AddAspNetCoreInstrumentation()` alone already gives you automatic traces/metrics for raw HTTP), but you'd lose all visibility into your *business* logic — `orders.created`, `payment.duration`, and named spans like `"CheckInventory"`. You'd be back to generic monitoring instead of real observability.
 
 ---
 
-## 2. `Models/Models.cs` — العقود بين أجزاء النظام
+## 2. `Models/Models.cs` — The Contracts Between Components
 
 ```csharp
 public record Product(int Id, string Name, decimal Price, int Stock);
 ```
 
-استخدمنا `record` مش `class` عمدًا: الـ `record` بيديك `Equals`/`ToString` مجانًا،
-ومهم هنا لأن الـ Logging بيطبع الـ object أحيانًا — تجربة أنضف مع `record`.
+We deliberately used `record` instead of `class`: a `record` gives you `Equals`/`ToString` for free, which matters here because logging sometimes prints the object directly — a much cleaner experience with `record`.
 
 ```csharp
 public class InsufficientStockException(int productId)
@@ -75,7 +81,8 @@ public class PaymentFailedException(string reason)
     : Exception($"Payment failed: {reason}");
 ```
 
-دي "Primary Constructor" بتاعة C# 12 — نفس معنى:
+This is C# 12's **primary constructor** syntax — equivalent to:
+
 ```csharp
 public class InsufficientStockException : Exception
 {
@@ -83,26 +90,25 @@ public class InsufficientStockException : Exception
         : base($"Product {productId} is out of stock") { }
 }
 ```
-لكن أقصر. **ليه عاملين Exception مخصوصة بدل `throw new Exception("...")` عادي؟**
-عشان في `Program.cs` نقدر نـ `catch` كل نوع لوحده ونرجّع الـ HTTP status code
-المناسب له (409 Conflict للـ stock، 402 Payment Required للدفع). لو استخدمنا
-`Exception` عام، كنا هنرجع 500 لكل حاجة وده غلط منطقيًا.
+
+...just shorter. **Why bother with dedicated exception types instead of a plain `throw new Exception("...")`?**
+
+Because in `Program.cs` we can `catch` each type individually and return the right HTTP status code for it — `409 Conflict` for stock issues, `402 Payment Required` for payment failures. If we'd used a generic `Exception`, we'd return `500` for everything, which would be logically wrong.
 
 ---
 
-## 3. `Services/ProductService.cs` — الـ "قاعدة بيانات" المزيفة
+## 3. `Services/ProductService.cs` — The Fake "Database"
 
 ```csharp
 private readonly List<Product> _products = new()
 {
     new Product(1, "Wireless Mouse", 250, 40),
     new Product(2, "Mechanical Keyboard", 950, 15),
-    new Product(3, "USB-C Hub", 400, 0), // out of stock عمدًا
+    new Product(3, "USB-C Hub", 400, 0), // out of stock, on purpose
 };
 ```
 
-منتج رقم 3 مخزونه صفر **عن قصد** — ده مش خطأ. بيخليك تجرب مسار الفشل
-(`InsufficientStockException`) من غير ما تحتاج تعدّل داتا أو تعمل setup إضافي.
+Product #3 has zero stock **on purpose** — that's not a bug. It lets you exercise the failure path (`InsufficientStockException`) without needing any extra setup or data changes.
 
 ```csharp
 public Product? GetById(int id)
@@ -114,49 +120,33 @@ public Product? GetById(int id)
 }
 ```
 
-- `using var activity = ...StartActivity(...)`: بيفتح Span اسمه `ProductService.GetById`.
-  الـ `using` معناها لما الكود يخرج من الـ method (نهاية الـ scope)، الـ Span يقفل
-  نفسه تلقائيًا ويسجل مدته. مفيش `activity.Stop()` محتاج تكتبه يدويًا.
-- `activity?.SetTag(...)`: بتضيف "خاصية" على الـ Span زي `product.id = 3`.
-  في Jaeger لما تفتح الـ Span هتلاقي الـ tag ده تحت "Tags" — بيساعدك تعرف مين
-  الطلب اللي كان بيدور على منتج مين وقت المشكلة.
-- الـ `?` بعد `activity`: لو مفيش حد بيسمع (Listener) على الـ ActivitySource
-  ده، `StartActivity` بترجع `null` (توفير performance)، فـ `?.` بتمنع
-  NullReferenceException.
-- `Thread.Sleep(10)`: مزيّف عمدًا، بيحاكي "استعلام قاعدة بيانات حقيقي بياخد وقت".
-  لو استبدلت الكلاس ده بـ EF Core حقيقي، السطر ده يتشال والـ instrumentation
-  التلقائية لـ EF Core هي اللي هتظهر المدة الحقيقية.
+- `using var activity = ...StartActivity(...)`: opens a span named `ProductService.GetById`. Because of `using`, the span closes itself automatically — and its duration gets recorded — the moment the method's scope ends. You never have to call `activity.Stop()` manually.
+- `activity?.SetTag(...)`: attaches an attribute to the span, e.g. `product.id = 3`. In Jaeger, opening that span shows this under "Tags" — it tells you exactly which product a given request was asking about when something went wrong.
+- The `?` after `activity`: if nothing is listening to this `ActivitySource`, `StartActivity` returns `null` (to save on overhead), so `?.` prevents a `NullReferenceException`.
+- `Thread.Sleep(10)`: a deliberate stand-in for "a real database query that takes some time." If you replaced this class with real EF Core, this line would go away — and EF Core's own automatic instrumentation would surface the *actual* query duration instead.
 
 ---
 
-## 4. `Services/PaymentService.cs` — "القنبلة الموقوتة" بتاعة الـ Incident
+## 4. `Services/PaymentService.cs` — The Incident's "Time Bomb"
 
 ```csharp
 _delayMs = int.TryParse(Environment.GetEnvironmentVariable("SHOPFLOW_PAYMENT_DELAY_MS"), out var d) ? d : 150;
 _failRate = double.TryParse(Environment.GetEnvironmentVariable("SHOPFLOW_PAYMENT_FAIL_RATE"), out var f) ? f : 0.0;
 ```
 
-بنقرأ الإعدادات من الـ Environment Variables مش من الكود نفسه. ده اللي بيخليك
-تعمل "Production Incident" وأنت شغّال — تغيّر قيمة في `docker-compose.yml`،
-تعمل `docker compose up -d` تاني، وبس، من غير ما تلمس أي سطر C#. ده Practice
-حقيقي — في الشغل الفعلي كتير من الإعدادات بتتغير بالـ config/env مش بإعادة نشر الكود.
+Settings come from environment variables, not hardcoded values. This is what lets you trigger a "production incident" while the app is already running: change a value in `docker-compose.yml`, run `docker compose up -d` again, and that's it — no C# code touched. This mirrors real-world practice, where a lot of production configuration changes happen through config/env, not through redeploying code.
 
 ```csharp
 using var activity = ShopFlowTelemetry.ActivitySource.StartActivity("PaymentService.Charge", ActivityKind.Client);
 ```
 
-لاحظ الفرق عن `ProductService`: هنا حاطين `ActivityKind.Client` صراحةً.
-ده بيقول لـ OpenTelemetry "الـ Span ده معناه إحنا بنستنى رد من حاجة برانية"
-(زي API خارجي). في أدوات الـ Tracing المتقدمة، الفرق ده بيتلوّن بشكل مختلف
-وبيتفهرس مختلف، عشان تقدر تفلتر "ورّيني كل الـ Client calls البطيئة" لوحدها.
+Notice the difference from `ProductService`: here we explicitly pass `ActivityKind.Client`. This tells OpenTelemetry "this span represents us waiting on a response from something external" (like a third-party API). In more advanced tracing tools, that distinction gets its own color and its own index, so you can filter for "show me every slow Client call" on its own.
 
 ```csharp
 await Task.Delay(_delayMs); // this line IS the "External Payment API"
 ```
 
-السطر ده حرفيًا هو الـ "External Payment API" اللي شايفينه في كل الديجرامات.
-مفيش API حقيقي هنا — إحنا بس بنستنى وقت. ده كافي تمامًا عشان يعلّم المفهوم،
-ومفيش داعي لعمل API تاني كامل بس عشان الديمو.
+This line is, literally, the "External Payment API" you see in all the architecture diagrams. There's no real external API here — we're just waiting. That's entirely sufficient to teach the concept, and there's no need to build a whole second service just for a demo.
 
 ```csharp
 if (_random.NextDouble() < _failRate)
@@ -168,12 +158,8 @@ if (_random.NextDouble() < _failRate)
 }
 ```
 
-- `_random.NextDouble()` بيرجع رقم بين 0 و 1. لو `_failRate = 0.2` يبقى
-  فرصة 20% إن الشرط يتحقق ويفشل الدفع — زي رمي نرد لكل عملية دفع.
-- `activity?.SetStatus(ActivityStatusCode.Error, ...)`: **مهم جدًا.** ده اللي
-  بيخلي الـ Span يظهر **أحمر** في Jaeger. من غير السطر ده، الـ Span هيظهر
-  عادي حتى لو فيه Exception، وهتضيع وقت تدور على المشكلة بعينك بدل ما
-  Jaeger يوريهالك مباشرة.
+- `_random.NextDouble()` returns a number between 0 and 1. If `_failRate = 0.2`, there's a 20% chance the condition is true and the payment "fails" — like rolling a die on every single payment.
+- `activity?.SetStatus(ActivityStatusCode.Error, ...)`: **this line matters a lot.** It's what makes the span show up **red** in Jaeger. Without it, the span would look normal even though an exception was thrown, and you'd waste time hunting for the problem yourself instead of Jaeger pointing straight at it.
 
 ```csharp
 ShopFlowTelemetry.PaymentDuration.Record(
@@ -181,22 +167,17 @@ ShopFlowTelemetry.PaymentDuration.Record(
     new KeyValuePair<string, object?>("outcome", "failed"));
 ```
 
-بنسجل المدة **حتى لو فشلت العملية**، ومعاها Tag اسمه `outcome=failed`.
-كده في Grafana تقدر تعمل query يفلتر بس على `outcome="failed"` ويقولك
-"عمليات الدفع اللي فشلت كانت بتاخد قد إيه بالظبط" — مش بس "كام مرة فشلت".
+We record the duration **even when the operation fails**, tagged with `outcome=failed`. That lets you filter in Grafana for just `outcome="failed"` and answer "how long did *failed* payments actually take?" — not just "how many of them failed."
 
 ---
 
-## 5. `Services/OrderService.cs` — قلب الـ Trace كله
+## 5. `Services/OrderService.cs` — The Heart of the Trace
 
 ```csharp
 using var activity = ShopFlowTelemetry.ActivitySource.StartActivity("OrderService.CreateOrder");
 ```
 
-ده الـ **Parent Span**. كل الـ spans التانية (Validate, CheckInventory,
-PaymentService.Charge, SaveOrder) هتتحط تلقائيًا **جوه** الـ Span ده في شجرة
-الـ Trace، لأن .NET بيتتبع الـ "current activity" تلقائيًا من غير ما تربطهم
-يدويًا. ده اللي بيطلع لك الشكل الشجري في Jaeger:
+This is the **parent span**. Every other span (Validate, CheckInventory, `PaymentService.Charge`, SaveOrder) automatically nests **inside** this one in the trace tree — .NET tracks the "current activity" for you, with no manual linking required. This is exactly what produces the tree structure you see in Jaeger:
 
 ```
 OrderService.CreateOrder
@@ -215,10 +196,7 @@ using (ShopFlowTelemetry.ActivitySource.StartActivity("Validate"))
 }
 ```
 
-لاحظ هنا استخدمنا `using (...)` بقوسين، مش `using var`. الفرق: لما تحط
-قوسين، الـ Span بيتقفل في نهاية الـ block ده بالظبط (بعد الـ `}` اللي بعد
-الشرط) — مش لما الـ method كلها تخلص. ده بيدّيك تحكم أدق في "امتى الخطوة
-دي فعليًا بدأت وخلصت" داخل الـ Trace.
+Notice the parenthesized `using (...)` here, instead of `using var`. The difference: with braces, the span closes at the exact end of that block (right after the closing `}`) — not when the whole method finishes. This gives you finer control over exactly when a given step in the trace actually started and ended.
 
 ```csharp
 try
@@ -232,34 +210,29 @@ catch (PaymentFailedException)
 }
 ```
 
-هنا بنعمل حاجتين: (1) نسجل الـ metric إن Order فشلت بسبب الدفع تحديدًا
-(مش "فشلت" بس، ده كان هيبقى مفيد أقل)، و(2) `throw;` من غير ما نكتب
-`throw ex;` — الفرق مهم جدًا: `throw;` بتحافظ على الـ Stack Trace الأصلي،
-بينما `throw ex;` بتمسحه وتخليك تشوف بس السطر اللي فيه `throw ex` مش
-مكان الخطأ الحقيقي. تفصيلة صغيرة بتفرق كتير وقت الـ Debugging الفعلي.
+Two things happen here: (1) we record the metric that the order failed *specifically because of payment* (not just "failed" in general, which would be far less useful), and (2) `throw;` — not `throw ex;`. That difference matters a lot: `throw;` preserves the original stack trace, while `throw ex;` erases it, leaving you looking at the line where you wrote `throw ex` instead of where the error actually occurred. A small detail that makes a real difference when you're debugging in production.
 
 ```csharp
 _logger.LogInformation("Order {OrderId} created successfully for Customer {CustomerId}, Total {Total}",
     order.Id, order.CustomerId, order.Total);
 ```
 
-لاحظ إننا مكتبناش:
+Note that we did **not** write:
+
 ```csharp
 _logger.LogInformation($"Order {order.Id} created for {order.CustomerId}");
 ```
-ده الفرق بين **Structured Logging** و **String Interpolation** العادي:
-- بالطريقة اللي استخدمناها، Serilog بيحتفظ بـ `OrderId` و `CustomerId` كـ
-  **حقول منفصلة** جوه الـ log entry (مش نص واحد مدموج). فتقدر بعدين تعمل
-  `WHERE OrderId = 456` في أداة زي Seq أو Loki.
-- لو استخدمت `$"..."`، كل حاجة بتتحول لـ نص واحد ثابت، وتفقد القدرة على
-  الفلترة/البحث الدقيق. ده بالظبط اللي شرحناه في نقطة "إيه اللي مينفعش
-  يتسجل" — الفرق بين Log عشوائي وLog قابل للتحليل.
+
+That's the difference between **structured logging** and plain string interpolation:
+
+- With the approach we used, Serilog keeps `OrderId` and `CustomerId` as **separate fields** inside the log entry (not merged into one blob of text). That means you can later run something like `WHERE OrderId = 456` in a tool like Seq or Loki.
+- If you use `$"..."`, everything collapses into one fixed string, and you lose the ability to filter/search precisely. This is exactly the distinction we made earlier between "what should never be logged this way" — the difference between a throwaway log line and one that's actually analyzable.
 
 ---
 
-## 6. `Program.cs` — سلك التوصيل بين كل حاجة
+## 6. `Program.cs` — The Wiring Between Everything
 
-### أ. Serilog
+### a. Serilog
 
 ```csharp
 Log.Logger = new LoggerConfiguration()
@@ -270,16 +243,11 @@ Log.Logger = new LoggerConfiguration()
     .CreateLogger();
 ```
 
-- `.Enrich.FromLogContext()`: ده اللي بيخلي `{TraceId}` في الـ template يظهر
-  فعليًا. من غيره، Serilog مش هيعرف إن فيه TraceId أصلًا، والـ placeholder
-  هيطبع فاضي.
-- `outputTemplate`: بيتحكم في **شكل** الـ log لما يتطبع في الـ Console.
-  جرّب تغيّره وشوف الفرق — مثلًا لو شلت `({TraceId})` هتفقد القدرة إنك
-  تربط الـ log بالـ trace بمجرد نظرة.
-- `builder.Host.UseSerilog();` (السطر اللي بعدها): ده اللي بيقول لـ ASP.NET
-  Core "استخدم Serilog بدل الـ Logger الافتراضي بتاعك في كل حتة".
+- `.Enrich.FromLogContext()`: this is what makes `{TraceId}` in the template actually resolve to something. Without it, Serilog has no idea a `TraceId` even exists, and the placeholder would print empty.
+- `outputTemplate`: controls the **shape** of each log line as printed to the console. Try changing it and see the difference — for instance, removing `({TraceId})` would mean you can no longer connect a log line back to its trace at a glance.
+- `builder.Host.UseSerilog();` (the following line): this tells ASP.NET Core "use Serilog instead of your default logger, everywhere."
 
-### ب. OpenTelemetry
+### b. OpenTelemetry
 
 ```csharp
 builder.Services.AddOpenTelemetry()
@@ -288,9 +256,7 @@ builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => { ... });
 ```
 
-- `.ConfigureResource(r => r.AddService(...))`: بيحط "بطاقة تعريف" على كل
-  حاجة بيطلعها السيرفر ده، عشان لما يوصل لـ Jaeger/Prometheus، تعرف إنها
-  جاية من `ShopFlow.Api` بالتحديد (مهم جدًا لو عندك أكتر من سيرفيس).
+- `.ConfigureResource(r => r.AddService(...))`: stamps an "identity card" on everything this server emits, so that once it reaches Jaeger/Prometheus, you know it specifically came from `ShopFlow.Api` (crucial once you have more than one service).
 
 ```csharp
 tracing
@@ -300,17 +266,10 @@ tracing
     .AddOtlpExporter(o => { o.Endpoint = new Uri(...); });
 ```
 
-- `.AddSource(...)`: هنا بالظبط بنقول "اسمعني على أي Span بيتعمل من
-  الـ ActivitySource بتاعنا". لو نسيت السطر ده، كل الـ spans اليدوية
-  (Validate, CheckInventory...) مش هتظهر خالص في Jaeger — بس اللي تلقائي
-  هيفضل شغال.
-- `.AddAspNetCoreInstrumentation()`: دي مكتبة جاهزة بتعمل Span تلقائي
-  لكل HTTP request داخل، من غير ما تكتب كود إضافي.
-- `.AddHttpClientInstrumentation()`: نفس الفكرة بس لأي `HttpClient` بتستخدمه
-  عشان تكلم API خارجي حقيقي — دلوقتي مش مستخدمة فعليًا (لأن Payment مزيفة)،
-  بس لو ربطت Payment API حقيقي بـ `HttpClient`، هتاخد الـ span تلقائيًا.
-- `.AddOtlpExporter(...)`: ده اللي بيبعت كل الـ traces فعليًا لـ Jaeger،
-  عن طريق بروتوكول اسمه OTLP (OpenTelemetry Protocol) على البورت 4317.
+- `.AddSource(...)`: this is exactly where we say "listen for any span produced by our `ActivitySource`." Forget this line, and none of the manual spans (Validate, CheckInventory...) will ever show up in Jaeger — only the automatic ones will.
+- `.AddAspNetCoreInstrumentation()`: a ready-made library that automatically creates a span for every incoming HTTP request, with zero extra code from you.
+- `.AddHttpClientInstrumentation()`: the same idea, but for any `HttpClient` you use to call a real external API. It's not doing anything right now (since Payment is faked), but if you wired up a real Payment API behind an `HttpClient`, you'd get its span automatically.
+- `.AddOtlpExporter(...)`: this is what actually ships every trace to Jaeger, over a protocol called OTLP (OpenTelemetry Protocol), on port 4317.
 
 ```csharp
 metrics
@@ -320,16 +279,11 @@ metrics
     .AddPrometheusExporter();
 ```
 
-- `.AddMeter(...)`: زي `.AddSource` بالظبط بس للـ Metrics — من غيرها،
-  `orders.created` و `payment.duration` مش هيظهروا في `/metrics`.
-- `.AddRuntimeInstrumentation()`: بتديك مجانًا metrics عن الـ .NET runtime
-  نفسه (GC, Threads, Memory) — مفيدة جدًا وقت الـ Incident عشان تستبعد
-  "المشكلة في السيرفر نفسه" زي ما شرحنا في خطوة "CPU 35%, Memory 40%".
-- `.AddPrometheusExporter()`: ده اللي بيفتح endpoint اسمه `/metrics`
-  بصيغة يفهمها Prometheus مباشرة (بدون OTLP هنا — Prometheus بيعمل "Pull"
-  مش "Push").
+- `.AddMeter(...)`: the metrics equivalent of `.AddSource` — without it, `orders.created` and `payment.duration` never appear on `/metrics`.
+- `.AddRuntimeInstrumentation()`: gives you .NET runtime metrics for free (GC, threads, memory) — extremely useful during an incident to rule out "is the problem the server itself," exactly as covered in the "CPU 35%, Memory 40%" step.
+- `.AddPrometheusExporter()`: opens an endpoint called `/metrics` in a format Prometheus understands directly (no OTLP involved here — Prometheus works by *pulling*, not by being pushed to).
 
-### ج. Middleware تسجيل الطلبات
+### c. Request-Logging Middleware
 
 ```csharp
 app.Use(async (context, next) =>
@@ -344,14 +298,10 @@ app.Use(async (context, next) =>
 });
 ```
 
-- ليه `try/finally` مش `try/catch`؟ عشان إحنا مش عايزين "نمسك" الخطأ
-  ونمنعه — عايزينه يكمل يطلع طبيعي (عشان ASP.NET Core يرجع 500 مثلًا) —
-  إحنا بس عايزين نضمن إننا **نسجل** الـ log حتى لو حصل Exception. الـ
-  `finally` بيتنفذ في الحالتين (نجاح أو فشل).
-- `await next();`: ده اللي بيكمل السلسلة لباقي الـ Middlewares لحد ما يوصل
-  للـ Endpoint نفسه. لو مكتبتهاش، الطلب يقف هنا ومايوصلش للـ API خالص.
+- Why `try/finally` and not `try/catch`? Because we're deliberately *not* trying to swallow the error — we still want it to propagate normally (so ASP.NET Core can, say, return a `500`). We just want to guarantee the log line gets written either way. `finally` runs in both the success and failure cases.
+- `await next();`: this continues the pipeline to the remaining middlewares, down to the actual endpoint. Without it, the request would stop right here and never reach the API at all.
 
-### د. الـ Endpoints
+### d. Endpoints
 
 ```csharp
 app.MapPost("/api/orders", async (CreateOrderRequest request, IOrderService orders) =>
@@ -366,15 +316,11 @@ app.MapPost("/api/orders", async (CreateOrderRequest request, IOrderService orde
 });
 ```
 
-لاحظ إن الـ Endpoint نفسه **مالوش أي علاقة بالـ Telemetry مباشرة** — كله
-مبني جوه `OrderService`. ده معماريًا مهم: الـ Endpoint شغلته الوحيدة إنه
-يحوّل النتيجة/الخطأ لـ HTTP status code مناسب. أي حد يقرا الـ Endpoint
-هيفهم "إيه اللي المفروض يرجع للـ Client" من غير ما يتغرق في تفاصيل
-الـ Tracing.
+Notice the endpoint itself **has nothing to do with telemetry directly** — all of it lives inside `OrderService`. This matters architecturally: the endpoint's only job is to translate a result/error into the right HTTP status code. Anyone reading the endpoint can understand "what should be returned to the client" without getting lost in tracing details.
 
 ---
 
-## 7. `docker-compose.yml` — إزاي كل حاجة بتتكلم مع بعض
+## 7. `docker-compose.yml` — How Everything Talks to Each Other
 
 ```yaml
 api:
@@ -385,16 +331,9 @@ api:
     - Otlp__Endpoint=http://jaeger:4317
 ```
 
-- `"5000:8080"`: يعني "البورت 8080 جوه الـ container (اللي الـ API شغال
-  عليه) هيبقى متاح على جهازك على البورت 5000". عشان كده بتفتح
-  `localhost:5000` مش `localhost:8080`.
-- `Otlp__Endpoint`: لاحظ الـ Double Underscore (`__`). دي طريقة .NET إنه
-  يحوّل `Otlp:Endpoint` (اللي في `appsettings.json`) لصيغة تصلح كـ
-  Environment Variable (لأن الـ `:` مش مسموح بيه في أسماء متغيرات
-  البيئة على كل الأنظمة). .NET بيحولها تلقائي.
-- `http://jaeger:4317`: هنا بنستخدم اسم الـ service (`jaeger`) مش
-  `localhost`. جوه شبكة Docker Compose، كل service بيقدر يوصل للتاني
-  باسمه مباشرة — Docker بيعمل DNS داخلي لوحده.
+- `"5000:8080"`: means "port 8080 inside the container (where the API is actually running) is exposed on your machine as port 5000." That's why you open `localhost:5000`, not `localhost:8080`.
+- `Otlp__Endpoint`: note the double underscore (`__`). This is .NET's convention for converting `Otlp:Endpoint` (as it would appear in `appsettings.json`) into something valid as an environment-variable name (since `:` isn't allowed in env var names on every OS). .NET converts it back automatically.
+- `http://jaeger:4317`: we use the service name (`jaeger`), not `localhost`. Inside a Docker Compose network, every service can reach every other service by name — Docker handles the internal DNS for you.
 
 ```yaml
 jaeger:
@@ -404,10 +343,7 @@ jaeger:
     - "4317:4317"
 ```
 
-`all-in-one` معناها إن الـ image ده فيه كل مكونات Jaeger (Collector,
-Query, UI, Storage in-memory) في container واحد — ممتاز للتعلم/الديمو،
-مش هتستخدمه بالشكل ده في Production حقيقي (هناك بتفصل الـ Storage على
-Elasticsearch/Cassandra مثلًا).
+`all-in-one` means this single image bundles every Jaeger component (Collector, Query, UI, in-memory storage) into one container — great for learning/demos, but not how you'd run it in a real production setup (there, storage is typically split out to Elasticsearch/Cassandra, for example).
 
 ```yaml
 prometheus:
@@ -415,8 +351,7 @@ prometheus:
     - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
 ```
 
-بنـ"mount" ملف الإعدادات بتاعنا جوه الـ container. الـ `:ro` معناها
-Read-Only — الـ container مايقدرش يعدّل الملف ده، بس يقراه.
+We mount our own config file into the container. `:ro` means read-only — the container can read the file but can't modify it.
 
 ---
 
@@ -429,10 +364,7 @@ scrape_configs:
       - targets: ["api:8080"]
 ```
 
-Prometheus بيشتغل بمبدأ **Pull** (عكس فكرة إنك تبعتله الداتا). كل
-`scrape_interval` (5 ثواني هنا)، هو اللي بيروح بنفسه لـ `api:8080/metrics`
-ويسحب القيم. لو الـ API واقع وقت الـ scrape، هتلاقي "gap" في الجراف —
-وده في حد ذاته معلومة مفيدة (السيرفر كان down).
+Prometheus works on a **pull** model (the opposite of you pushing data to it). Every `scrape_interval` (5 seconds here), Prometheus itself reaches out to `api:8080/metrics` and pulls the values. If the API is down at scrape time, you'll see a gap in the graph — and that gap is, in itself, useful information (the server was down).
 
 ---
 
@@ -445,29 +377,23 @@ export const options = {
 };
 ```
 
-`vus` = Virtual Users، يعني k6 هيحاكي 20 مستخدم بيضربوا الـ API **في نفس
-الوقت**، مستمرين لمدة 30 ثانية. ده اللي بيولّد الحمل الكافي عشان تشوف
-فرق حقيقي بين Average وP95/P99.
+`vus` = Virtual Users. k6 will simulate 20 users hitting the API **simultaneously**, sustained for 30 seconds. This is what generates enough load to actually see a meaningful difference between the average and the P95/P99.
 
 ```javascript
 check(orderRes, { 'POST /orders is 201 or handled error': (r) => r.status < 500 });
 ```
 
-`check` مش بتوقف الاختبار لو فشل — بس بتسجل نسبة نجاح في تقرير k6 النهائي.
-هنا بنقبل أي status أقل من 500 (يعني حتى 409 Conflict أو 402 Payment
-Required مقبولين) لأننا عارفين إن فيه سيناريوهات فشل متعمدة (المنتج
-الناقص المخزون). الفشل الحقيقي اللي بندور عليه هو 500 (يعني السيرفر
-اتعطل فعليًا).
+`check` doesn't stop the test on failure — it just records a pass/fail ratio in k6's final report. Here we accept any status below 500 (so even a `409 Conflict` or `402 Payment Required` counts as fine), because we know some scenarios are *meant* to fail (the out-of-stock product). The real failure we care about is `500` — meaning the server itself actually broke.
 
 ---
 
-## خلاصة: امتى تلمس أي ملف
+## Summary: What File Do I Touch When...
 
-| عايز تعمل إيه | تروح على |
+| I want to... | Go to... |
 |---|---|
-| تضيف endpoint جديد | `Program.cs` |
-| تضيف خطوة جديدة في الـ Order flow (زي Send Notification) | `OrderService.cs` |
-| تضيف metric/counter جديد | `ShopFlowTelemetry.cs` ثم تستخدمه فين ما تحب |
-| تغيّر سلوك الـ Incident (بطء/فشل) | `docker-compose.yml` → env vars بتاعة `api` |
-| تغيّر شكل الـ logs | `Program.cs` → `outputTemplate` |
-| تضيف dependency حقيقي (SQL/Redis) | `ProductService.cs` (تستبدلها بـ EF Core) + `docker-compose.yml` (تضيف الـ service) + Health Checks في `Program.cs` |
+| Add a new endpoint | `Program.cs` |
+| Add a new step to the order flow (e.g. Send Notification) | `OrderService.cs` |
+| Add a new metric/counter | `ShopFlowTelemetry.cs`, then use it wherever you need |
+| Change incident behavior (slowness/failures) | `docker-compose.yml` → the `api` service's env vars |
+| Change how logs look | `Program.cs` → `outputTemplate` |
+| Add a real dependency (SQL/Redis) | `ProductService.cs` (swap it for real EF Core) + `docker-compose.yml` (add the service) + health checks in `Program.cs` |
