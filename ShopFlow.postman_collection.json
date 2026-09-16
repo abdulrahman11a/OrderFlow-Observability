@@ -1,0 +1,112 @@
+{
+  "info": {
+    "name": "ShopFlow Observability Demo",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "List Products",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/api/products"
+      }
+    },
+    {
+      "name": "Get Product by Id",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/api/products/1"
+      }
+    },
+    {
+      "name": "Create Order - Happy Path",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "http://localhost:5000/api/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerId\": 1,\n  \"productId\": 1,\n  \"quantity\": 1,\n  \"paymentMethod\": \"card\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Create Order - Out of Stock (product 3)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "http://localhost:5000/api/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerId\": 1,\n  \"productId\": 3,\n  \"quantity\": 1,\n  \"paymentMethod\": \"card\"\n}"
+        }
+      }
+    },
+    {
+      "name": "500 - Unhandled Exception",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/api/debug/500"
+      }
+    },
+    {
+      "name": "500 - Null Reference",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/api/debug/null-reference"
+      }
+    },
+    {
+      "name": "500 - Invalid Operation",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/api/debug/invalid-operation"
+      }
+    },
+    {
+      "name": "500 - Database Failure",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/api/debug/database"
+      }
+    },
+    {
+      "name": "503 - Service Unavailable",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/api/debug/503"
+      }
+    },
+    {
+      "name": "504 - Gateway Timeout",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/api/debug/504"
+      }
+    },
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/health"
+      }
+    },
+    {
+      "name": "Prometheus Metrics",
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:5000/metrics"
+      }
+    }
+  ]
+}

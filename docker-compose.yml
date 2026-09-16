@@ -1,0 +1,65 @@
+services:
+
+  api:
+    build: ./ShopFlow.Api
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Otlp__Endpoint=http://jaeger:4317
+      - LOKI_URL=http://loki:3100
+      - SHOPFLOW_PAYMENT_DELAY_MS=150
+      - SHOPFLOW_PAYMENT_FAIL_RATE=0.0
+    depends_on:
+      - jaeger
+      - loki
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "16686:16686"
+      - "14317:4317"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+
+      # SMTP - Gmail
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=smtp.gmail.com:587
+      - GF_SMTP_USER=abdulrahmanfikry1@gmail.com
+      - GF_SMTP_PASSWORD=ypjs nqyx aeet mrrk
+      - GF_SMTP_FROM_ADDRESS=abdulrahmanfikry1@gmail.com
+      - GF_SMTP_FROM_NAME=ShopFlow Grafana
+      - GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS
+
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:3.1.0
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
