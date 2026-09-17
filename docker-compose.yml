@@ -43,9 +43,9 @@ services:
       # SMTP - Gmail
       - GF_SMTP_ENABLED=true
       - GF_SMTP_HOST=smtp.gmail.com:587
-      - GF_SMTP_USER=abdulrahmanfikry1@gmail.com
-      - GF_SMTP_PASSWORD=ypjs nqyx aeet mrrk
-      - GF_SMTP_FROM_ADDRESS=abdulrahmanfikry1@gmail.com
+      - GF_SMTP_USER=test@example.com
+      - GF_SMTP_PASSWORD=test-password-123
+      - GF_SMTP_FROM_ADDRESS=test@example.com
       - GF_SMTP_FROM_NAME=ShopFlow Grafana
       - GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS
 
